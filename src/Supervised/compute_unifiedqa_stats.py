@@ -11,7 +11,7 @@ def get_args():
     parser.add_argument("--predictions_dir", type=str, default="./predictions/", help="dir with all the checkpoints")
     parser.add_argument("--model_name", type=str, default="unifiedqa-v2-t5-base-1251000")
     parser.add_argument("--validation_filename", type=str, default="../../data/condaqa_dev.json")
-    parser.add_argument("--test_filename", type=str, default="../../data/condaqa_test.json")
+    parser.add_argument("--test_filename", type=str, default="../../data/condaqa_dev.json") # # # changed test to dev
     parser.add_argument("--seed", type=str, default="70")
     parser.add_argument("--output_dir", type=str, default="./")
     args = parser.parse_args()
@@ -49,7 +49,7 @@ def compute_accuracy(pred_file, data_file, label_key="label"):
 
     met = [gold_l[label_key].strip().lower() == pred_l.strip().lower() for gold_l, pred_l in
            zip(gold_data, predictions)]
-    accuracy = sum(met) * 1.0 / len(met) * 100
+    accuracy = (sum(met) * 1.0 / len(met) * 100) if len(met) != 0 else 100 # # # avoid division by 0 in testing
     print (accuracy)
     return accuracy
 
@@ -87,13 +87,13 @@ def get_groups(gold_data):
 
 def compute_group_score(pred_answers, gold_answers):
     assert len(pred_answers) == len(gold_answers)
-    incorrect = 0 # # #
+    # # # incorrect = 0 # # #
     for ind in range(len(gold_answers)):
         if pred_answers[ind].lower().strip() != gold_answers[ind].lower().strip():
-            incorrect += 1 # # #
-            '''return 0 # # #
-    return 1 # # #'''
-    return (len(gold_answers) - incorrect)/len(gold_answers) # # # Changing the score formulation 
+            # # # incorrect += 1 # # #
+            return 0 # # #
+    return 1 # # #
+    # # #return (len(gold_answers) - incorrect)/len(gold_answers) # # # Changing the score formulation 
 
 
 def compute_consistency(pred_file, data_file, label_key="label"):
@@ -126,7 +126,7 @@ def compute_consistency(pred_file, data_file, label_key="label"):
                 consistency_dict["0-" + str(contrast_edit)]["total"] += 1
 
     for key in consistency_dict:
-        consistency_dict[key]["consistency"] = consistency_dict[key]["correct"] * 100.0 / consistency_dict[key]["total"]
+        consistency_dict[key]["consistency"] = (consistency_dict[key]["correct"] * 100.0 / consistency_dict[key]["total"]) if consistency_dict[key]["total"] != 0 else 100 # # # avoid division by 0 in testing
 
     return consistency_dict["all"]["consistency"], consistency_dict["0-1"]["consistency"], consistency_dict["0-2"][
         "consistency"], consistency_dict["0-3"]["consistency"]
@@ -177,16 +177,17 @@ def main(args):
     OUTPUT_DIR = best_checkpoint
 
     # Evaluate on test set
-
-    test_command = "python run_negatedqa_t5.py \
+    # # # changed test to dev on line 185
+    # # # test_command = "python run_negatedqa_t5.py \
+    test_command = "deepspeed run_negatedqa_t5.py --per_device_eval_batch_size 1 --gradient_accumulation_steps 1 --deepspeed deepspeed_config.json \
     --model_name_or_path {OUTPUT_DIR} \
     --train_file {DATA_DIR}condaqa_train_unifiedqa.json \
     --validation_file {DATA_DIR}condaqa_dev_unifiedqa.json \
-    --test_file {DATA_DIR}condaqa_test_unifiedqa.json \
+    --test_file {DATA_DIR}condaqa_dev_unifiedqa.json \
     --do_eval \
     --do_predict \
     --predict_with_generate \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 1 \
     --learning_rate 1e-5 \
     --num_train_epochs 5 \
     --output_dir {OUTPUT_DIR}/test_predictions \

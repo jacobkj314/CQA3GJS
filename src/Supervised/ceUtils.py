@@ -1,18 +1,73 @@
 # # # Setup Hyperparameters
-with open('../../../hparams','r') as hparams:
-    exec(hparams.read())
+lam = 1 # # # Default value
+try:
+    with open('../../../hparams','r') as hparams:
+        exec(hparams.read())
+except:
+    print('No hparams found, using lam=1')
 
-# # #Bundling Setup Code
+# # # Setup CEloss
+import torch
+def get_first_token_likelihood_from_logits(out_ids, logits=None):
+    '''
+    This is a MUCH more efficient version of the above, because you don't have to run the forward pass to generate the logits again
+    '''
+    scores = logits # # # [:,0,:] # # # the logits are going to come pre-squeezed
 
+    softmaxedScores = torch.log(torch.softmax(scores,dim=1))#also transform to log-likelihood
+    score = softmaxedScores[range(out_ids.shape[0]),out_ids[:,1]] 
+
+    return score
+
+def ce_loss_fn(lm_logits, labels):
+    ce = []
+    for i in range(labels.shape[0]):#iterate across number of individual samples in bundle
+        ce.append(
+          get_first_token_likelihood_from_logits(
+            labels,
+            lm_logits[:,0,:].roll(i, 0)  # # # pre-squeeze the logits and then roll between instances
+          ) 
+        )
+    z = torch.log( #normalizing denominator
+      sum(torch.exp(term) for term in ce) #add up all the denominators - using regular python sum because they are tensors in a list
+    ) 
+    ceLoss = torch.log( # return to log space
+      torch.sum(#sum across instances
+        torch.exp( #switch from log space to linear space for sum
+          ce[0] - z #divide the correctly lined up pairings by normalizing constant (in log space) - index 0 is lined up correctly
+        )
+      )
+    ) * -1 #Multiply by -1 so that by minimizing loss we maximize the proportion of the distribution is taken up by the correct answer
+    return ceLoss
+
+
+# # #Setup Bundling
 def bundling(batch): 
     batch_size = batch['input_ids'].shape[0]
     for i in range(batch_size):
         yield {col:batch[col][i, ...] for col in batch}
 
 
+# # # Start GJS
+from torch.nn import functional as F
+from torch.nn.modules.loss import _Loss
+from torch import Tensor
+
+def js_div(input, target, reduction = 'mean', log_target = False, pi = .5):
+    m = pi * input + (1-pi) * target
+    return pi * F.kl_div(input, m, reduction=reduction, log_target=log_target) + (1-pi) * F.kl_div(target, m, reduction=reduction, log_target=log_target)
+
+class GJSDivLoss(_Loss):
+    __constants__ = ['reduction'] # not sure what this does but the KLDivLoss has it
+    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', log_target: bool = False, pi: int = .5) -> None:
+        super(GJSDivLoss, self).__init__(size_average, reduce, reduction)
+        self.log_target = log_target
+        self.pi = pi
+    def forward(self, p1: Tensor, p2: Tensor, y: Tensor):
+        return js_div(input = (p1+p2) * .5, target = y, reduction = self.reduction, log_target = self.log_target, pi = self.pi) + (1-self.pi) * js_div(input = p1, target = p2, reduction = self.reduction, log_target = self.log_target, pi = .5)
+# # # # # End GJS
 
 
-# # #
 
 # # # START TRAINER SETUP CODE
 # coding=utf-8
@@ -672,205 +727,41 @@ class Seq2SeqTrainerCE(Seq2SeqTrainer):
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
-# # # END TRAINER SETUP CODE
+    
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
-# # # START MY SETUP CODE
+        Subclass and override for custom behavior.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+        outputs = model(**inputs)
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
 
-import torch
-
-def get_first_token_likelihood(model, input_ids, out_ids, attention_mask_full = None, decode_in_tokens = None):
-  if attention_mask_full is None:
-    attention_mask_full = torch.ones_like(input_ids).to(input_ids.device)
-  attention_mask = attention_mask_full[:, 1:2]
-
-  if decode_in_tokens is None:
-    decode_in_tokens = torch.zeros_like(out_ids)[...,:1] + model.config.decoder_start_token_id
-
-  iterInstances = [j for j in range(out_ids.shape[0])]
-
-  # # # Replacing generate() with forward() -- this should let the backward hooks persist in the output scores
-  '''scores = model.generate(input_ids=input_ids, attention_mask=attention_mask, decoder_input_ids = decode_in_tokens, return_dict_in_generate=True, output_scores=True, max_new_tokens=1)['scores'][0]'''
-  scores = model(input_ids=input_ids, attention_mask=attention_mask, decoder_input_ids=decode_in_tokens)['logits'][:,0,:]
-
-  softmaxedScores = torch.log(torch.softmax(scores,dim=1))#also transform to log-likelihood
-  score = softmaxedScores[iterInstances,out_ids[:,1]] 
-  # # # score.requires_grad = True
-  return score
-
-import copy
-import math
-import os
-import warnings
-from typing import Optional, Tuple, Union
-from transformers.modeling_outputs import BaseModelOutput
-from transformers.modeling_outputs import Seq2SeqLMOutput 
-from torch.nn import CrossEntropyLoss
-def forwardCE(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.BoolTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        decoder_head_mask: Optional[torch.FloatTensor] = None,
-        cross_attn_head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None, # # # CE will only be computed when there are labels
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.FloatTensor], Seq2SeqLMOutput]:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-            Labels for computing the sequence classification/regression loss. Indices should be in `[-100, 0, ...,
-            config.vocab_size - 1]`. All labels set to `-100` are ignored (masked), the loss is only computed for
-            labels in `[0, ..., config.vocab_size]`
-        Returns:
-        Examples:
-        ```python
-        >>> from transformers import T5Tokenizer, T5ForConditionalGeneration
-        >>> tokenizer = T5Tokenizer.from_pretrained("t5-small")
-        >>> model = T5ForConditionalGeneration.from_pretrained("t5-small")
-        >>> # training
-        >>> input_ids = tokenizer("The <extra_id_0> walks in <extra_id_1> park", return_tensors="pt").input_ids
-        >>> labels = tokenizer("<extra_id_0> cute dog <extra_id_1> the <extra_id_2>", return_tensors="pt").input_ids
-        >>> outputs = model(input_ids=input_ids, labels=labels)
-        >>> loss = outputs.loss
-        >>> logits = outputs.logits
-        >>> # inference
-        >>> input_ids = tokenizer(
-        ...     "summarize: studies have shown that owning a dog is good for you", return_tensors="pt"
-        ... ).input_ids  # Batch size 1
-        >>> outputs = model.generate(input_ids)
-        >>> print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-        >>> # studies have shown that owning a dog is good for you.
-        ```"""
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
-        if head_mask is not None and decoder_head_mask is None:
-            if self.config.num_layers == self.config.num_decoder_layers:
-                warnings.warn(__HEAD_MASK_WARNING_MSG, FutureWarning)
-                decoder_head_mask = head_mask
-
-        # Encode if needed (training, first prediction pass)
-        if encoder_outputs is None:
-            # Convert encoder inputs in embeddings if needed
-            encoder_outputs = self.encoder(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                inputs_embeds=inputs_embeds,
-                head_mask=head_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(
-                last_hidden_state=encoder_outputs[0],
-                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
-            )
-
-        hidden_states = encoder_outputs[0]
-
-        if self.model_parallel:
-            torch.cuda.set_device(self.decoder.first_device)
-
-        if labels is not None and decoder_input_ids is None and decoder_inputs_embeds is None:
-            # get decoder inputs from shifting lm labels to the right
-            decoder_input_ids = self._shift_right(labels)
-
-        # Set device for model parallelism
-        if self.model_parallel:
-            torch.cuda.set_device(self.decoder.first_device)
-            hidden_states = hidden_states.to(self.decoder.first_device)
-            if decoder_input_ids is not None:
-                decoder_input_ids = decoder_input_ids.to(self.decoder.first_device)
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(self.decoder.first_device)
-            if decoder_attention_mask is not None:
-                decoder_attention_mask = decoder_attention_mask.to(self.decoder.first_device)
-
-        # Decode
-        decoder_outputs = self.decoder(
-            input_ids=decoder_input_ids,
-            attention_mask=decoder_attention_mask,
-            inputs_embeds=decoder_inputs_embeds,
-            past_key_values=past_key_values,
-            encoder_hidden_states=hidden_states,
-            encoder_attention_mask=attention_mask,
-            head_mask=decoder_head_mask,
-            # # # cross_attn_head_mask=cross_attn_head_mask, # # # I am not completely sure why, but I need to comment out lines involving cross_attn_head_mask or the decoder yells at me here 
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        sequence_output = decoder_outputs[0]
-
-        # Set device for model parallelism
-        if self.model_parallel:
-            torch.cuda.set_device(self.encoder.first_device)
-            self.lm_head = self.lm_head.to(self.encoder.first_device)
-            sequence_output = sequence_output.to(self.lm_head.weight.device)
-
-        if self.config.tie_word_embeddings:
-            # Rescale output before projecting on vocab
-            # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
-            sequence_output = sequence_output * (self.model_dim**-0.5)
-
-        lm_logits = self.lm_head(sequence_output)
-
-        loss = None
         if labels is not None:
-            # # # BEGIN MY CODE FOR CE LOSS
-            ce = []
-            for i in range(labels.shape[0]):#iterate across number of individual samples in bundle
-              ce.append(
-                  get_first_token_likelihood(
-                      self, #the model itself
-                      input_ids.roll(i, 0), #question conditional, so try each question with each answer
-                      labels,
-                      attention_mask.roll(i, 0)
-                  ) 
-              )
-            z = torch.log( #normalizing denominator
-                  sum(torch.exp(term) for term in ce) #add up all the denominators - using regular python sum because they are tensors in a list
-                ) 
-            ceLoss = torch.log( # return to log space
-                torch.sum(#sum across instances
-                    torch.exp( #switch from log space to linear space for sum
-                      ce[0] - z #divide the correctly lined up pairings by normalizing constant (in log space) - index 0 is lined up correctly
-                    )
+            if unwrap_model(model)._get_name() in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                mle_loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                mle_loss = self.label_smoother(outputs, labels)
+        else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
                 )
-            ) * -1 #Multiply by -1 so that by minimizing loss we maximize the proportion of the distribution is taken up by the correct answer
-            # # # END MY CODE FOR CE LOSS
-            loss_fct = CrossEntropyLoss(ignore_index=-100)
-            loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1)) + (lam)*ceLoss # # # I added the ceLoss part
-            # TODO(thom): Add z_loss https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/layers.py#L666 # # # (This TODO was already in the original huggingface repo code)
-        if not return_dict:
-            output = (lm_logits,) + decoder_outputs[1:] + encoder_outputs
-            return ((loss,) + output) if loss is not None else output
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            mle_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        return Seq2SeqLMOutput(
-            loss=loss,
-            logits=lm_logits,
-            past_key_values=decoder_outputs.past_key_values,
-            decoder_hidden_states=decoder_outputs.hidden_states,
-            decoder_attentions=decoder_outputs.attentions,
-            cross_attentions=decoder_outputs.cross_attentions,
-            encoder_last_hidden_state=encoder_outputs.last_hidden_state,
-            encoder_hidden_states=encoder_outputs.hidden_states,
-            encoder_attentions=encoder_outputs.attentions,
-        )
+        # # # 
+        ce_loss = ce_loss_fn(outputs['logits'], inputs['labels'])
+        loss = mle_loss + lam * ce_loss
+        # # # 
 
-
-
-
+        return (loss, outputs) if return_outputs else loss
+# # # END TRAINER SETUP CODE

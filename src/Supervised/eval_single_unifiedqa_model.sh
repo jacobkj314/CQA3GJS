@@ -17,7 +17,8 @@ for SEED in "${SEEDS[@]}"; do
       OUTPUT_DIR=$2/${MODEL_NAME}_negation_all_${SEED}_train_${SETTING}_test_${TEST_FILE}      
       mkdir -p $OUTPUT_DIR #Remove? 
       # # # changed test to dev on line 24
-      python run_negatedqa_t5.py \
+      # # # # #python run_negatedqa_t5.py \
+      deepspeed run_negatedqa_t5.py --per_device_eval_batch_size 1 --gradient_accumulation_steps 1 --deepspeed deepspeed_config.json \
         --model_name_or_path $OUTPUT_DIR \
         --train_file ${DATA_DIR}/condaqa_train_unifiedqa.json \
         --validation_file ${DATA_DIR}/condaqa_dev_unifiedqa.json \
@@ -25,7 +26,7 @@ for SEED in "${SEEDS[@]}"; do
         --do_eval \
         --do_predict \
         --predict_with_generate \
-        --per_device_train_batch_size 8 \
+        --per_device_train_batch_size 1 \
         --learning_rate 1e-5 \
         --num_train_epochs 5 \
         --output_dir $OUTPUT_DIR/test_predictions \
@@ -56,7 +57,8 @@ for SEED in "${SEEDS[@]}"; do
       OUTPUT_DIR=${CHECKPOINT}
       mkdir -p $OUTPUT_DIR/val_predictions
 
-      python run_negatedqa_t5.py \
+      # # # # #python run_negatedqa_t5.py \
+      deepspeed run_negatedqa_t5.py --per_device_eval_batch_size 1 --gradient_accumulation_steps 1 --deepspeed deepspeed_config.json \
         --model_name_or_path $OUTPUT_DIR \
         --train_file ${DATA_DIR}/condaqa_train_unifiedqa.json \
         --validation_file ${DATA_DIR}/condaqa_dev_unifiedqa.json \
@@ -64,7 +66,7 @@ for SEED in "${SEEDS[@]}"; do
         --do_eval \
         --do_predict \
         --predict_with_generate \
-        --per_device_train_batch_size 8 \
+        --per_device_train_batch_size 1 \
         --learning_rate 1e-5 \
         --num_train_epochs 10 \
         --output_dir $OUTPUT_DIR/val_predictions \
