@@ -49,23 +49,44 @@ def bundling(batch):
 
 
 # # # Start GJS
+import torch
 from torch.nn import functional as F
 from torch.nn.modules.loss import _Loss
 from torch import Tensor
 
-def js_div(input, target, reduction = 'mean', log_target = False, pi = .5):
-    m = pi * input + (1-pi) * target
-    return pi * F.kl_div(input, m, reduction=reduction, log_target=log_target) + (1-pi) * F.kl_div(target, m, reduction=reduction, log_target=log_target)
+def js_div(p_1, p_2, reduction = 'batchmean', log_target = False, pi = .5):
+    m = pi * p_1 + (1-pi) * p_2; print(f'    m of {p_1} and {p_2} is {m}')
+    pi_kl_input_m = pi * F.kl_div(m.log(), p_1, reduction=reduction, log_target=log_target); print(f'    kl({p_1}||{m}) times {pi} is {pi_kl_input_m}')
+    onepi_kl_target_m = (1-pi) * F.kl_div(m.log(), p_2, reduction=reduction, log_target=log_target); print(f'    kl({p_2}||{m}) times {1-pi} is {onepi_kl_target_m}')
+    return pi_kl_input_m + onepi_kl_target_m
 
 class GJSDivLoss(_Loss):
     __constants__ = ['reduction'] # not sure what this does but the KLDivLoss has it
-    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', log_target: bool = False, pi: int = .5) -> None:
+    def __init__(self, size_average=None, reduce=None, reduction: str = 'batchmean', log_target: bool = False, pi: int = .5) -> None:
         super(GJSDivLoss, self).__init__(size_average, reduce, reduction)
         self.log_target = log_target
         self.pi = pi
     def forward(self, p1: Tensor, p2: Tensor, y: Tensor):
-        return js_div(input = (p1+p2) * .5, target = y, reduction = self.reduction, log_target = self.log_target, pi = self.pi) + (1-self.pi) * js_div(input = p1, target = p2, reduction = self.reduction, log_target = self.log_target, pi = .5)
+        '''
+        This method implements GJS loss as presented in Englesson & Azizpour, 2021 "Consistency Regularization Can Improve Robustness to Label Noise"
+        NOTE: do not give inputs p1, p2 or one-hot target y in logspace!!
+        '''
+
+        assert(len(p1.shape) == 2 and len(p2.shape) == 2 and len(y.shape) == 2) #each of these needs to be [batch_size x vocab_size], but if this doesn't happen, the next operation will FAIL SILENTLY!!! 
+
+        p1p22 = (p1+p2) * .5; print(f'(p1 + p2)/2 = {p1p22}')
+        one_minus_pi = 1-self.pi; print(f'1-pi = {one_minus_pi}')
+        js_pi = js_div(p_1 = y, p_2 = p1p22, reduction = self.reduction, log_target = self.log_target, pi = self.pi); print(f'js_pi(y, (p1+p2)/2) = {js_pi}')
+        js5 = one_minus_pi * js_div(p_1 = p1, p_2 = p2, reduction = self.reduction, log_target = self.log_target, pi = .5); print(f'js_.5(p1, p2) * (1-pi) = {js5}')
+
+        return js_pi + js5
 # # # # # End GJS
+
+# # # # # TEST GJS
+p1 = Tensor([.05, .2, .4, .35])
+p2 = Tensor([.3, .3, .3, .1])
+y = Tensor([0,0,1,0])
+# # # # #
 
 
 
@@ -230,7 +251,7 @@ DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
 
 if is_in_notebook():
-    from .utils.notebook import NotebookProgressCallback
+    from transformers.utils.notebook import NotebookProgressCallback
 
     DEFAULT_PROGRESS_CALLBACK = NotebookProgressCallback
 
