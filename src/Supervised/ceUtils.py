@@ -86,10 +86,10 @@ class GJSDivLoss(_Loss):
 
         return js_pi + js5
     
+_inner_loss_fn = GJSDivLoss(pi = pi)
 def gjs_loss_fn(lm_logits, labels):
-    inner_loss_fn = GJSDivLoss(pi = pi)
 
-    return inner_loss_fn(
+    return _inner_loss_fn(
         lm_logits[:1, #first instance
                   0, #only the next word
                   :  #all logits
