@@ -1,10 +1,11 @@
 # # # Setup Hyperparameters
-lam = 1 # # # Default value
+lam = 1; pi=.5 # # # Default values
 try:
     with open('../../../hparams','r') as hparams:
         exec(hparams.read())
 except:
-    print('No hparams found, using lam=1')
+    print('No hparams found, ', end='')
+print(f'using lam={lam}; pi={pi}')
 
 # # # Setup CEloss
 import torch
@@ -70,6 +71,10 @@ class GJSDivLoss(_Loss):
         '''
         This method implements GJS loss as presented in Englesson & Azizpour, 2021 "Consistency Regularization Can Improve Robustness to Label Noise"
         NOTE: do not give inputs p1, p2 or one-hot target y in logspace!!
+
+
+
+
         '''
 
         assert(len(p1.shape) == 2 and len(p2.shape) == 2 and len(y.shape) == 2) #each of these needs to be [batch_size x vocab_size], but if this doesn't happen, the next operation will FAIL SILENTLY!!! 
@@ -80,6 +85,16 @@ class GJSDivLoss(_Loss):
         js5 = one_minus_pi * js_div(p_1 = p1, p_2 = p2, reduction = self.reduction, log_target = self.log_target, pi = .5); print(f'js_.5(p1, p2) * (1-pi) = {js5}')
 
         return js_pi + js5
+    
+def gjs_loss_fn(lm_logits, labels):
+    inner_loss_fn = GJSDivLoss(pi = pi)
+
+    return inner_loss_fn(
+        lm_logits, 
+        lm_logits.roll(1,0),
+        labels # # # # # This probably needs to be turned into a one-hot !
+        )
+
 # # # # # End GJS
 
 
@@ -775,10 +790,13 @@ class Seq2SeqTrainerCE(Seq2SeqTrainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             mle_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        # # # 
-        ce_loss = ce_loss_fn(outputs['logits'], inputs['labels'])
-        loss = mle_loss + lam * ce_loss
-        # # # 
+        # # # CE
+        '''ce_loss = ce_loss_fn(outputs['logits'], inputs['labels'])
+        loss = mle_loss + lam * ce_loss'''
+        # # # Consistency Regularization 
+        gjs_loss = gjs_loss_fn(outputs['logits'], inputs['labels'])
+        loss = mle_loss + lam * gjs_loss
+        # # #
 
         return (loss, outputs) if return_outputs else loss
 # # # END TRAINER SETUP CODE
