@@ -93,11 +93,11 @@ def gjs_loss_fn(lm_logits, labels):
         lm_logits[:1, #first instance
                   0, #only the next word
                   :  #all logits
-                  ], 
+                  ].softmax(dim=1), #softmax to create distribution (NOT IN LOG SPACE!!) 
         lm_logits[-1:, #last instance
                   0, #only the next word
                   :  #all logits
-                  ],
+                  ].softmax(dim=1), #softmax to create distribution (NOT IN LOG SPACE!!)
         F.one_hot(labels[:1, #first instance
                          0  #only the next word
                          ],
