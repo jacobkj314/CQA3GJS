@@ -56,9 +56,9 @@ from torch.nn.modules.loss import _Loss
 from torch import Tensor
 
 def js_div(p_1, p_2, reduction = 'batchmean', log_target = False, pi = .5):
-    m = pi * p_1 + (1-pi) * p_2; print(f'    m of {p_1} and {p_2} is {m}')
-    pi_kl_input_m = pi * F.kl_div(m.log(), p_1, reduction=reduction, log_target=log_target); print(f'    kl({p_1}||{m}) times {pi} is {pi_kl_input_m}')
-    onepi_kl_target_m = (1-pi) * F.kl_div(m.log(), p_2, reduction=reduction, log_target=log_target); print(f'    kl({p_2}||{m}) times {1-pi} is {onepi_kl_target_m}')
+    m = pi * p_1 + (1-pi) * p_2; #print(f'    m of {p_1} and {p_2} is {m}')
+    pi_kl_input_m = pi * F.kl_div(m.log(), p_1, reduction=reduction, log_target=log_target); #print(f'    kl({p_1}||{m}) times {pi} is {pi_kl_input_m}')
+    onepi_kl_target_m = (1-pi) * F.kl_div(m.log(), p_2, reduction=reduction, log_target=log_target); #print(f'    kl({p_2}||{m}) times {1-pi} is {onepi_kl_target_m}')
     return pi_kl_input_m + onepi_kl_target_m
 
 class GJSDivLoss(_Loss):
@@ -79,10 +79,10 @@ class GJSDivLoss(_Loss):
 
         assert(len(p1.shape) == 2 and len(p2.shape) == 2 and len(y.shape) == 2) #each of these needs to be [batch_size x vocab_size], but if this doesn't happen, the next operation will FAIL SILENTLY!!! 
 
-        p1p22 = (p1+p2) * .5; print(f'(p1 + p2)/2 = {p1p22}')
-        one_minus_pi = 1-self.pi; print(f'1-pi = {one_minus_pi}')
-        js_pi = js_div(p_1 = y, p_2 = p1p22, reduction = self.reduction, log_target = self.log_target, pi = self.pi); print(f'js_pi(y, (p1+p2)/2) = {js_pi}')
-        js5 = one_minus_pi * js_div(p_1 = p1, p_2 = p2, reduction = self.reduction, log_target = self.log_target, pi = .5); print(f'js_.5(p1, p2) * (1-pi) = {js5}')
+        p1p22 = (p1+p2) * .5; #print(f'(p1 + p2)/2 = {p1p22}')
+        one_minus_pi = 1-self.pi; #print(f'1-pi = {one_minus_pi}')
+        js_pi = js_div(p_1 = y, p_2 = p1p22, reduction = self.reduction, log_target = self.log_target, pi = self.pi); #print(f'js_pi(y, (p1+p2)/2) = {js_pi}')
+        js5 = one_minus_pi * js_div(p_1 = p1, p_2 = p2, reduction = self.reduction, log_target = self.log_target, pi = .5); #print(f'js_.5(p1, p2) * (1-pi) = {js5}')
 
         return js_pi + js5
     
@@ -100,7 +100,7 @@ def gjs_loss_fn(lm_logits, labels):
                   ].softmax(dim=1), #softmax to create distribution (NOT IN LOG SPACE!!)
         F.one_hot(labels[:1, #first instance
                          0  #only the next word
-                         ],
+                         ].float(),
                          num_classes=lm_logits.shape[-1]
                          )
         )
