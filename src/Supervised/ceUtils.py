@@ -82,11 +82,7 @@ class GJSDivLoss(_Loss):
         return js_pi + js5
 # # # # # End GJS
 
-# # # # # TEST GJS
-p1 = Tensor([.05, .2, .4, .35])
-p2 = Tensor([.3, .3, .3, .1])
-y = Tensor([0,0,1,0])
-# # # # #
+
 
 
 

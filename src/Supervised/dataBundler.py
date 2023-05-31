@@ -17,7 +17,7 @@ def same(items):
 
 def sortByQuestion(gathered):
 	questions = set(d["question"] for d in gathered)
-	return [
+	sorted = [
 			{
 				"question":q, 
 				"contexts":[
@@ -32,6 +32,8 @@ def sortByQuestion(gathered):
 			} 
 	 			for q in questions
 		   ]
+	
+	return [q for q in sorted if same([i["label"] for i in q["contexts"]])]
 
 
 def json2data(url, sortBy=sortByQuestion):
@@ -40,6 +42,11 @@ def json2data(url, sortBy=sortByQuestion):
 	jsonArray = "[" + re.sub("\n", ",", text[:-1]) + "]" #format as json array
 	jsonData = json.loads(jsonArray)
 	
+	jsonData = [instance for instance in jsonData 
+		if instance["PassageEditID"] in [0,1]
+			and instance["label"] in ["YES", "NO", "DON'T KNOW"]
+		] # # # # # This keeps only originals and paraphrases that have YES/NO/DON'T KNOW answers
+
 	passageIDs = set(d["PassageID"] for d in jsonData)
 	
 	def gather(pId):
