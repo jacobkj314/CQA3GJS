@@ -90,9 +90,19 @@ def gjs_loss_fn(lm_logits, labels):
     inner_loss_fn = GJSDivLoss(pi = pi)
 
     return inner_loss_fn(
-        lm_logits, 
-        lm_logits.roll(1,0),
-        labels # # # # # This probably needs to be turned into a one-hot !
+        lm_logits[:1, #first instance
+                  0, #only the next word
+                  :  #all logits
+                  ], 
+        lm_logits[-1:, #last instance
+                  0, #only the next word
+                  :  #all logits
+                  ],
+        F.one_hot(labels[:1, #first instance
+                         0  #only the next word
+                         ],
+                         num_classes=lm_logits.shape[-1]
+                         )
         )
 
 # # # # # End GJS
