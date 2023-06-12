@@ -100,7 +100,7 @@ def gjs_loss_fn(lm_logits, labels):
                   ].softmax(dim=1), #softmax to create distribution (NOT IN LOG SPACE!!)
         F.one_hot(labels[:1, #first instance (it doesn't really matter which though, since they are the same)
                          0  #only the next word
-                         ].float(),
+                         ],
                          num_classes=lm_logits.shape[-1]
                          )
         )
