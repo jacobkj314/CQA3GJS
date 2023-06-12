@@ -81,7 +81,7 @@ class GJSDivLoss(_Loss):
 
         p1p22 = (p1+p2) * .5; #print(f'(p1 + p2)/2 = {p1p22}')
         one_minus_pi = 1-self.pi; #print(f'1-pi = {one_minus_pi}')
-        js_pi = js_div(p_1 = y, p_2 = p1p22, reduction = self.reduction, log_target = self.log_target, pi = self.pi); #print(f'js_pi(y, (p1+p2)/2) = {js_pi}')
+        js_pi = js_div(p_1 = y.float(), p_2 = p1p22, reduction = self.reduction, log_target = self.log_target, pi = self.pi); #print(f'js_pi(y, (p1+p2)/2) = {js_pi}')
         js5 = one_minus_pi * js_div(p_1 = p1, p_2 = p2, reduction = self.reduction, log_target = self.log_target, pi = .5); #print(f'js_.5(p1, p2) * (1-pi) = {js5}')
 
         return js_pi + js5
